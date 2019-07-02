@@ -3,10 +3,9 @@
 # New VM
 rm -rf yolov3 weights coco
 git clone https://github.com/ultralytics/yolov3
-git clone https://github.com/cocodataset/cocoapi && cd cocoapi/PythonAPI && make && cd ../.. && cp -r cocoapi/PythonAPI/pycocotools yolov3
-git clone https://github.com/NVIDIA/apex && cd apex && pip install -v --no-cache-dir --global-option="--cpp_ext" --global-option="--cuda_ext" . --user && cd ..  && rm -rf apex
 bash yolov3/weights/download_yolov3_weights.sh && cp -r weights yolov3
 bash yolov3/data/get_coco_dataset.sh
+git clone https://github.com/cocodataset/cocoapi && cd cocoapi/PythonAPI && make && cd ../.. && cp -r cocoapi/PythonAPI/pycocotools yolov3
 sudo shutdown
 
 # Re-clone
@@ -74,7 +73,7 @@ rm -rf darknet && git clone https://github.com/AlexeyAB/darknet && cd darknet &&
 ./darknet detector train ../supermarket2/supermarket2.data ../yolo_v3_spp_pan_scale.cfg darknet53.conv.74 -map -dont_show # train spp
 ./darknet detector train ../yolov3/data/coco.data ../yolov3-spp.cfg darknet53.conv.74 -map -dont_show # train spp coco
 
-./darknet detector train data/coco.data ../yolov3-spp.cfg darknet53.conv.74 -map -dont_show # train spp
+./darknet detector train ../supermarket2/supermarket2.data ../yolov3-spp-sm2-1cls-scalexy_variable.cfg darknet53.conv.74 -map -dont_show # train spp
 gsutil cp -r backup/*5000.weights gs://sm6/weights
 sudo shutdown
 
@@ -93,9 +92,9 @@ python3 test.py --data ../supermarket2/supermarket2.data --weights ../darknet/ba
 
 
 
-# Debug/Development
-python3 train.py --data data/coco.data --img-size 320 --single-scale --batch-size 64 --accumulate 1 --epochs 1 --evolve --giou
-python3 test.py --weights weights/latest.pt --cfg cfg/yolov3-spp.cfg --img-size 320
 
+
+# Debug/Development
+python3 train.py --evolve --data data/coco_1k5k.data --epochs 30 --img-size 320
 gsutil cp evolve.txt gs://ultralytics
 sudo shutdown

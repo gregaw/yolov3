@@ -1,0 +1,1 @@
+gcloud compute scp --project yolo-test2 --zone us-west1-b bulawa-dep1-vm:~/$1/$2 $2

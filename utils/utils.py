@@ -11,9 +11,8 @@ from PIL import Image
 from tqdm import tqdm
 
 from . import torch_utils
-from . import google_utils
 
-matplotlib.rc('font', **{'size': 11})
+matplotlib.rc('font', **{'size': 12})
 
 # Set printoptions
 torch.set_printoptions(linewidth=1320, precision=5, profile='long')
@@ -271,21 +270,20 @@ def wh_iou(box1, box2):
     return inter_area / union_area  # iou
 
 
-def compute_loss(p, targets, model, giou_loss=False):  # predictions, targets, model
+def compute_loss(p, targets, model):  # predictions, targets, model
     ft = torch.cuda.FloatTensor if p[0].is_cuda else torch.Tensor
-    lxy, lwh, lcls, lconf = ft([0]), ft([0]), ft([0]), ft([0])
+    lxy, lwh, lcls, lconf, lgiou = ft([0]), ft([0]), ft([0]), ft([0]), ft([0])
     txy, twh, tcls, tbox, indices, anchor_vec = build_targets(model, targets)
     h = model.hyp  # hyperparameters
 
     # Define criteria
     MSE = nn.MSELoss()
     CE = nn.CrossEntropyLoss()  # (weight=model.class_weights)
-    BCEcls = nn.BCEWithLogitsLoss(pos_weight=ft([h['cls_pw']]))
-    BCEconf = nn.BCEWithLogitsLoss(pos_weight=ft([h['conf_pw']]))
+    BCE = nn.BCEWithLogitsLoss()
 
     # Compute losses
     bs = p[0].shape[0]  # batch size
-    k = bs / 64  # loss gain
+    k = bs  # loss gain
     for i, pi0 in enumerate(p):  # layer i predictions, i
         b, a, gj, gi = indices[i]  # image, anchor, gridy, gridx
         tconf = torch.zeros_like(pi0[..., 0])  # conf
@@ -293,27 +291,19 @@ def compute_loss(p, targets, model, giou_loss=False):  # predictions, targets, m
         # Compute losses
         if len(b):  # number of targets
             pi = pi0[b, a, gj, gi]  # predictions closest to anchors
-            tconf[b, a, gj, gi] = 1.0  # conf
-            # pi[..., 2:4] = torch.sigmoid(pi[..., 2:4])  # wh power loss (uncomment)
+            tconf[b, a, gj, gi] = 1  # conf
+            pi[..., 2:4] = torch.sigmoid(pi[..., 2:4])  # wh power loss (uncomment)
 
-            if giou_loss:
-                pbox = torch.cat((torch.sigmoid(pi[..., 0:2]), torch.exp(pi[..., 2:4]) * anchor_vec[i]), 1)  # predicted
-                giou = bbox_iou(pbox.t(), tbox[i], x1y1x2y2=False, GIoU=True)  # giou computation
-                lxy += (k * h['giou']) * (1.0 - giou).mean()  # giou loss
-            else:
-                lxy += (k * h['xy']) * MSE(torch.sigmoid(pi[..., 0:2]), txy[i])  # xy loss
-                lwh += (k * h['wh']) * MSE(pi[..., 2:4], twh[i])  # wh yolo loss
+            # Build GIoU boxes
+            pbox = torch.cat((torch.sigmoid(pi[..., 0:2]), torch.exp(pi[..., 2:4]) * anchor_vec[i]), 1)  # predicted box
+            giou = bbox_iou(pbox.t(), tbox[i], x1y1x2y2=False, GIoU=True)
 
-            tclsm = torch.zeros_like(pi[..., 5:])
-            tclsm[range(len(b)), tcls[i]] = 1.0
-            lcls += (k * h['cls']) * BCEcls(pi[..., 5:], tclsm)  # cls loss (BCE)
-            # lcls += (k * h['cls']) * CE(pi[..., 5:], tcls[i])  # cls loss (CE)
+            # lxy += (k * h['giou']) * (1.0 - giou).mean()  # giou loss
+            lxy += (k * h['xy']) * MSE(torch.sigmoid(pi[..., 0:2]), txy[i])  # xy loss
+            lwh += (k * h['wh']) * MSE(pi[..., 2:4], twh[i])  # wh yolo loss
+            lcls += (k * h['cls']) * CE(pi[..., 5:], tcls[i])  # class_conf loss
 
-            # Append targets to text file
-            # with open('targets.txt', 'a') as file:
-            #     [file.write('%11.5g ' * 4 % tuple(x) + '\n') for x in torch.cat((txy[i], twh[i]), 1)]
-
-        lconf += (k * h['conf']) * BCEconf(pi0[..., 4], tconf)  # obj_conf loss
+        lconf += (k * h['conf']) * BCE(pi0[..., 4], tconf)  # obj_conf loss
     loss = lxy + lwh + lconf + lcls
 
     return loss, torch.cat((lxy, lwh, lconf, lcls, loss)).detach()
@@ -358,8 +348,8 @@ def build_targets(model, targets):
         anchor_vec.append(layer.anchor_vec[a])
 
         # Width and height
-        twh.append(torch.log(gwh / layer.anchor_vec[a]))  # wh yolo method
-        # twh.append((gwh / layer.anchor_vec[a]) ** (1 / 3) / 2)  # wh power method
+        # twh.append(torch.log(gwh / layer.anchor_vec[a]))  # wh yolo method
+        twh.append((gwh / layer.anchor_vec[a]) ** (1 / 3) / 2)  # wh power method
 
         # Class
         tcls.append(c)
@@ -623,7 +613,7 @@ def plot_images(imgs, targets, fname='images.jpg'):
     plt.close()
 
 
-def plot_test_txt():  # from utils.utils import *; plot_test()
+def plot_test_txt():  # from test import *; plot_test()
     # Plot test.txt histograms
     x = np.loadtxt('test.txt', dtype=np.float32)
     box = xyxy2xywh(x[:, :4])
@@ -640,22 +630,6 @@ def plot_test_txt():  # from utils.utils import *; plot_test()
     ax[1].hist(cy, bins=600)
     fig.tight_layout()
     plt.savefig('hist1d.jpg', dpi=300)
-
-
-def plot_targets_txt():  # from utils.utils import *; plot_targets_txt()
-    # Plot test.txt histograms
-    x = np.loadtxt('targets.txt', dtype=np.float32)
-    x = x.T
-
-    s = ['x targets', 'y targets', 'width targets', 'height targets']
-    fig, ax = plt.subplots(2, 2, figsize=(8, 8))
-    ax = ax.ravel()
-    for i in range(4):
-        ax[i].hist(x[i], bins=100, label='%.3g +/- %.3g' % (x[i].mean(), x[i].std()))
-        ax[i].legend()
-        ax[i].set_title(s[i])
-    fig.tight_layout()
-    plt.savefig('targets.jpg', dpi=300)
 
 
 def plot_results(start=0, stop=0):  # from utils.utils import *; plot_results()
